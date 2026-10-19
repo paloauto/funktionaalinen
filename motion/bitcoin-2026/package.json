@@ -1,0 +1,9 @@
+{
+  "name": "bitcoin-2026-motion",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.64.1",
+    "three": "0.169.0"
+  }
+}

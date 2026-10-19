@@ -1,0 +1,244 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  body {
+    background: radial-gradient(120% 70% at 50% 45%, #15110c 0%, #08090d 55%, #040406 100%);
+    font-family: 'Inter', sans-serif; color: #f4f1ea;
+  }
+  canvas { position: absolute; inset: 0; }
+  #ui { position: absolute; inset: 0; pointer-events: none; }
+  .header { position: absolute; left: 80px; right: 80px; top: 150px; }
+  .kicker { font-size: 34px; font-weight: 600; letter-spacing: 10px; color: #F7931A; text-transform: uppercase; }
+  .price { font-size: 150px; font-weight: 800; letter-spacing: -5px; margin-top: 18px; font-variant-numeric: tabular-nums; line-height: 1; }
+  .sub { display: flex; gap: 22px; align-items: center; margin-top: 26px; font-size: 38px; font-weight: 500; }
+  .month { color: #b9b2a6; letter-spacing: 3px; text-transform: uppercase; }
+  .delta { padding: 8px 20px; border-radius: 40px; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 34px; }
+  .up { background: rgba(46, 204, 113, .16); color: #4be08a; }
+  .down { background: rgba(255, 84, 84, .16); color: #ff6b6b; }
+  .lbl { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; }
+  .mlabel { font-size: 28px; font-weight: 600; color: #8f887c; letter-spacing: 2px; }
+  .glabel { font-size: 24px; font-weight: 500; color: #5d584f; transform: translate(-100%, -50%); }
+  .callout { font-size: 30px; font-weight: 700; color: #ff6b6b; background: rgba(20, 8, 8, .7); border: 2px solid rgba(255,107,107,.5); padding: 10px 20px; border-radius: 14px; transform: translate(-50%, 0); }
+  .footer { position: absolute; left: 80px; right: 80px; bottom: 110px; font-size: 26px; line-height: 1.5; color: #6f695f; }
+  .footer b { color: #a39b8e; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <div class="header" id="header">
+    <div class="kicker">Bitcoin · 2026</div>
+    <div class="price" id="price">$0</div>
+    <div class="sub"><span class="month" id="month">Jan</span><span class="delta up" id="delta">+0.0%</span></div>
+  </div>
+  <div id="labels"></div>
+  <div class="footer" id="footer"><b>Monthly closes, BTC/USD (approximate).</b><br>Jan–Sep month-end closes, Oct = Oct 19. Source: StatMuse via web search. Not financial advice.</div>
+</div>
+<script type="importmap">
+{ "imports": { "three": "./node_modules/three/build/three.module.js", "three/addons/": "./node_modules/three/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const W = 1080, H = 1920, FPS = 30, DURATION = 14;
+const DATA = [
+  ['Jan', 78600], ['Feb', 67000], ['Mar', 68200], ['Apr', 76300], ['May', 73600],
+  ['Jun', 58600], ['Jul', 62800], ['Aug', 78500], ['Sep', 83550], ['Oct 19', 82000],
+];
+const BTC = 0xF7931A;
+const P_MIN = 50000, P_MAX = 90000, HEIGHT = 8, STEP = 2.4;
+const yOf = p => (p - P_MIN) / (P_MAX - P_MIN) * HEIGHT;
+const pOf = y => y / HEIGHT * (P_MAX - P_MIN) + P_MIN;
+const LAST_X = (DATA.length - 1) * STEP;
+
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const range = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// --- renderer / scene ---
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setSize(W, H); renderer.setPixelRatio(1); renderer.setClearColor(0x000000, 0);
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x07080c, 22, 48);
+const camera = new THREE.PerspectiveCamera(42, W / H, 0.1, 200);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.55, 0.5, 0.35));
+composer.addPass(new OutputPass());
+
+// --- price curve, parameterised by time (not arc length) so progress maps to dates ---
+const knots = DATA.map(([, p], i) => new THREE.Vector3(i * STEP, yOf(p), 0));
+const cat = new THREE.CatmullRomCurve3(knots, false, 'centripetal');
+class TimeCurve extends THREE.Curve {
+  getPoint(u, out = new THREE.Vector3()) { return cat.getPoint(u, out); }
+  getPointAt(u, out) { return this.getPoint(u, out); }
+  getTangentAt(u, out) { return this.getTangent(u, out); }
+}
+const curve = new TimeCurve();
+
+const SEG = 600, RAD = 12;
+const tube = new THREE.Mesh(
+  new THREE.TubeGeometry(curve, SEG, 0.09, RAD, false),
+  new THREE.MeshBasicMaterial({ color: 0xffb54d })
+);
+scene.add(tube);
+const halo = new THREE.Mesh(
+  new THREE.TubeGeometry(curve, SEG, 0.22, RAD, false),
+  new THREE.MeshBasicMaterial({ color: BTC, transparent: true, opacity: 0.14, depthWrite: false })
+);
+scene.add(halo);
+
+// curtain under the line, fading toward the floor
+const cPos = [], cV = [], cIdx = [];
+for (let k = 0; k <= SEG; k++) {
+  const p = curve.getPoint(k / SEG);
+  cPos.push(p.x, p.y, 0, p.x, 0, 0); cV.push(1, 0);
+  if (k < SEG) { const a = k * 2; cIdx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+}
+const curtainGeo = new THREE.BufferGeometry();
+curtainGeo.setAttribute('position', new THREE.Float32BufferAttribute(cPos, 3));
+curtainGeo.setAttribute('v', new THREE.Float32BufferAttribute(cV, 1));
+curtainGeo.setIndex(cIdx);
+const curtain = new THREE.Mesh(curtainGeo, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  vertexShader: `attribute float v; varying float vv; void main(){ vv = v; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
+  fragmentShader: `varying float vv; void main(){ gl_FragColor = vec4(mix(vec3(.35,.12,0.), vec3(.97,.58,.1), vv), pow(vv, 2.2) * .22); }`,
+}));
+scene.add(curtain);
+
+// grid: price lines on a back wall + floor lines
+const gridMat = new THREE.LineBasicMaterial({ color: 0x3a342b, transparent: true, opacity: 0 });
+const gridPts = [];
+const GRID_Z = -2.5;
+for (let p = P_MIN; p <= P_MAX; p += 10000) {
+  const y = yOf(p); gridPts.push(-1.5, y, GRID_Z, LAST_X + 1.5, y, GRID_Z);
+}
+for (let i = 0; i < DATA.length; i++) {
+  const x = i * STEP; gridPts.push(x, 0, GRID_Z, x, 0, 3);
+}
+gridPts.push(-1.5, 0, 0, LAST_X + 1.5, 0, 0);
+const gridGeo = new THREE.BufferGeometry();
+gridGeo.setAttribute('position', new THREE.Float32BufferAttribute(gridPts, 3));
+scene.add(new THREE.LineSegments(gridGeo, gridMat));
+
+// data dots + tip
+const dots = knots.map(k => {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.16, 20, 20), new THREE.MeshBasicMaterial({ color: 0xfff1d6 }));
+  m.position.copy(k); scene.add(m); return m;
+});
+const tip = new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 24), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+scene.add(tip);
+const ring = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.36, 48), new THREE.MeshBasicMaterial({ color: BTC, transparent: true, side: THREE.DoubleSide }));
+scene.add(ring);
+
+// drifting dust for depth (seeded, deterministic)
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const dustBase = [];
+for (let i = 0; i < 260; i++) dustBase.push(rnd() * 34 - 6, rnd() * 14 - 1, rnd() * 16 - 9);
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.Float32BufferAttribute(dustBase.slice(), 3));
+const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: 0xc98a3a, size: 0.05, transparent: true, opacity: 0.55, depthWrite: false }));
+scene.add(dust);
+
+// --- HTML labels projected from 3D ---
+const labelsEl = document.getElementById('labels');
+const mkLabel = (cls, text) => { const d = document.createElement('div'); d.className = 'lbl ' + cls; d.textContent = text; labelsEl.appendChild(d); return d; };
+const monthLabels = DATA.map(([m]) => mkLabel('mlabel', m.toUpperCase()));
+const gridLabels = [];
+for (let p = P_MIN; p <= P_MAX; p += 10000) gridLabels.push([p, mkLabel('glabel', '$' + p / 1000 + 'k')]);
+const LOW_I = DATA.reduce((b, d, i) => d[1] < DATA[b][1] ? i : b, 0);
+const lowCallout = mkLabel('callout', `2026 low · $${(DATA[LOW_I][1] / 1000).toFixed(1)}k`);
+const v3 = new THREE.Vector3();
+function place(el, pos, opacity) {
+  v3.copy(pos).project(camera);
+  el.style.left = ((v3.x + 1) / 2 * W).toFixed(1) + 'px';
+  el.style.top = ((1 - v3.y) / 2 * H).toFixed(1) + 'px';
+  el.style.opacity = v3.z < 1 ? opacity : 0;
+}
+
+const priceEl = document.getElementById('price'), monthEl = document.getElementById('month'), deltaEl = document.getElementById('delta');
+const headerEl = document.getElementById('header'), footerEl = document.getElementById('footer');
+const fmt = n => '$' + Math.round(n).toLocaleString('en-US');
+
+// --- timeline ---
+const GROW_A = 1.0, GROW_B = 9.6, WIDE_A = 9.4, WIDE_B = 12.2;
+const camPos = new THREE.Vector3(), camTarget = new THREE.Vector3(), tmp = new THREE.Vector3();
+
+window.renderFrame = function (t) {
+  const prog = ease(range(t, GROW_A, GROW_B));
+  const n = Math.max(1, Math.round(prog * SEG));
+  tube.geometry.setDrawRange(0, n * RAD * 6);
+  halo.geometry.setDrawRange(0, n * RAD * 6);
+  curtainGeo.setDrawRange(0, n * 6);
+
+  const tipPos = curve.getPoint(prog);
+  tip.position.copy(tipPos);
+  const pulse = (t * 1.4) % 1;
+  ring.position.copy(tipPos); ring.scale.setScalar(1 + pulse * 2.2);
+  ring.material.opacity = (1 - pulse) * 0.8 * (1 - range(t, WIDE_B, WIDE_B + 1));
+  ring.lookAt(camera.position);
+
+  const segF = prog * (DATA.length - 1);
+  dots.forEach((d, i) => {
+    const s = easeOut(clamp((segF - i) * 4 + 1));
+    d.scale.setScalar(i === 0 ? easeOut(range(t, GROW_A, GROW_A + .4)) : s);
+  });
+
+  gridMat.opacity = 0.9 * easeOut(range(t, 0.2, 1.4));
+  const dp = dustGeo.attributes.position;
+  for (let i = 0; i < dp.count; i++) {
+    dp.setY(i, dustBase[i * 3 + 1] + Math.sin(t * .5 + i) * .25);
+    dp.setX(i, dustBase[i * 3] + t * .12);
+  }
+  dp.needsUpdate = true;
+
+  // camera: chase the tip, then pull back to a wide reveal
+  // chase from behind-left so the drawn history recedes toward the camera side
+  const chaseT = new THREE.Vector3(tipPos.x + 1.5, lerp(tipPos.y, 4, 0.6), 0);
+  const swing = lerp(0.62, 0.5, prog);
+  const chaseP = new THREE.Vector3(chaseT.x - 12 * Math.cos(swing), 7, 12 * Math.sin(swing) + 2);
+  const wideT = new THREE.Vector3(LAST_X * 0.37, 2.6, 0);
+  const wideP = new THREE.Vector3(-17 + Math.sin(t * .3) * .8, 11, 19);
+  const w = ease(range(t, WIDE_A, WIDE_B));
+  const intro = 1 - easeOut(range(t, 0, GROW_A + 1));
+  camTarget.copy(chaseT).lerp(wideT, w);
+  camPos.copy(chaseP).lerp(wideP, w).add(new THREE.Vector3(-3 * intro, 2.5 * intro, 4 * intro));
+  camera.position.copy(camPos); camera.lookAt(camTarget);
+  camera.updateMatrixWorld();
+
+  // HUD
+  const shownPrice = pOf(tipPos.y);
+  priceEl.textContent = fmt(shownPrice);
+  const mi = Math.min(DATA.length - 1, Math.round(segF));
+  monthEl.textContent = DATA[mi][0];
+  const d = (shownPrice / DATA[0][1] - 1) * 100;
+  deltaEl.textContent = (d >= 0 ? '+' : '') + d.toFixed(1) + '% since Jan';
+  deltaEl.className = 'delta ' + (d >= 0 ? 'up' : 'down');
+  const hIn = easeOut(range(t, 0.1, 1.0));
+  headerEl.style.opacity = hIn; headerEl.style.transform = `translateY(${(1 - hIn) * 40}px)`;
+  footerEl.style.opacity = easeOut(range(t, WIDE_B - 0.6, WIDE_B + 0.4));
+
+  monthLabels.forEach((el, i) => {
+    place(el, tmp.set(i * STEP, -0.35, 0.5), 0.95 * easeOut(clamp((segF - i) * 3 + 1)));
+  });
+  gridLabels.forEach(([p, el]) => place(el, tmp.set(-1.7, yOf(p), GRID_Z), gridMat.opacity));
+  const lowP = knots[LOW_I];
+  place(lowCallout, tmp.set(lowP.x, lowP.y + 2.4, 0), easeOut(clamp((segF - LOW_I) * 2.5)));
+
+  composer.render();
+};
+window.FRAMES = DURATION * FPS; window.FPS = FPS;
+window.sceneReady = true;
+</script>
+</body>
+</html>
