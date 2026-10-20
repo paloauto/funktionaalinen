@@ -1,0 +1,601 @@
+<title>Helsinki Metro 3D</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: full-bleed 3D bedrock view; title block top-left, controls dock right (bottom sheet on phones), station card floats bottom-left. */
+  :root {
+    --rock: #090d10;       /* page ground: bedrock */
+    --rock-2: #11181c;     /* panels */
+    --seam: #24313a;       /* hairlines */
+    --text: #e6ebe8;
+    --muted: #84939a;
+    --m1: #ff6a13;         /* M1 Kivenlahti–Vuosaari */
+    --m2: #ffb547;         /* M2 Tapiola–Mellunmäki */
+    --display: 'Barlow Condensed', 'Arial Narrow', 'Roboto Condensed', sans-serif;
+    --body: 'Barlow', 'Helvetica Neue', Arial, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, 'DejaVu Sans Mono', monospace;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--rock); color: var(--text); font-family: var(--body); overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; }
+  #labels { position: fixed; inset: 0; pointer-events: none; }
+
+  .hud { position: fixed; z-index: 2; pointer-events: none;
+    top: calc(env(safe-area-inset-top, 0px) + 20px);
+    left: max(20px, env(safe-area-inset-left, 0px)); max-width: min(520px, calc(100% - 40px)); }
+  .eyebrow { font: 600 13px/1 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--m1); }
+  h1 { margin: 8px 0 0; font: 700 clamp(40px, 6vw, 68px)/.9 var(--display); letter-spacing: -.01em; text-transform: uppercase; text-wrap: balance; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font: 500 13px/1.3 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .facts b { color: var(--text); font-weight: 500; }
+
+  .dock { position: fixed; z-index: 3; width: 268px;
+    top: calc(env(safe-area-inset-top, 0px) + 20px); right: max(20px, env(safe-area-inset-right, 0px));
+    background: color-mix(in srgb, var(--rock-2) 88%, transparent); border: 1px solid var(--seam);
+    border-radius: 10px; padding: 16px; display: grid; gap: 16px; backdrop-filter: blur(8px); }
+  .group { display: grid; gap: 8px; }
+  .glabel { font: 600 12px/1 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .lines { display: grid; gap: 6px; }
+  .line-toggle { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; text-align: left;
+    background: transparent; color: var(--text); border: 1px solid var(--seam); border-radius: 8px; padding: 8px 10px; cursor: pointer; font: 500 14px/1.2 var(--body); }
+  .line-toggle[aria-pressed="false"] { opacity: .45; }
+  .line-toggle small { display: block; color: var(--muted); font-size: 12px; }
+  .badge { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; font: 700 15px/1 var(--display); color: #1a0d03; }
+  .b1 { background: var(--m1); } .b2 { background: var(--m2); }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .val { font: 500 13px var(--mono); color: var(--text); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--m1); }
+  .checks { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; }
+  .checks label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  input[type=checkbox] { accent-color: var(--m1); width: 16px; height: 16px; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .btn { font: 600 14px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; padding: 11px 8px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--seam); background: transparent; color: var(--text); }
+  .btn.primary { background: var(--m1); border-color: var(--m1); color: #1a0d03; }
+  .btn:focus-visible, .line-toggle:focus-visible, input:focus-visible { outline: 2px solid var(--m2); outline-offset: 2px; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.4; margin: 0; }
+
+  .card { position: fixed; z-index: 3; width: min(330px, calc(100% - 40px));
+    left: max(20px, env(safe-area-inset-left, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 44px);
+    background: var(--rock-2); border: 1px solid var(--seam); border-radius: 10px; padding: 16px 18px; display: grid; gap: 10px; }
+  .card h2 { margin: 0; font: 700 30px/1 var(--display); text-transform: uppercase; }
+  .card .chips { display: flex; gap: 6px; }
+  .card .chips span { font: 700 13px/1 var(--display); padding: 5px 8px; border-radius: 5px; color: #1a0d03; }
+  .card dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; }
+  .card dt { color: var(--muted); } .card dd { margin: 0; font-family: var(--mono); font-size: 13px; }
+  .card .close { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; border-radius: 6px; border: 1px solid var(--seam); background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; }
+
+  .gauge { position: fixed; z-index: 2; pointer-events: none; right: max(20px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 44px);
+    font: 500 12px/1.5 var(--mono); color: var(--muted); text-align: right; }
+  .credit { position: fixed; z-index: 2; left: max(20px, env(safe-area-inset-left, 0px)); right: max(20px, env(safe-area-inset-right, 0px));
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); font-size: 11px; color: var(--muted); pointer-events: none; }
+
+  .lbl { font: 600 13px/1 var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--text); white-space: nowrap;
+    padding: 3px 6px; border-radius: 4px; background: rgba(9, 13, 16, .66); transform: translateY(-16px); transition: opacity .25s; }
+  .lbl.major { font-size: 15px; }
+  .lbl.dim { opacity: 0; }
+
+  /* showcase / ride overlays */
+  .lower { position: fixed; z-index: 4; left: 72px; bottom: 80px; display: grid; gap: 6px; pointer-events: none; }
+  .lower .k { font: 600 18px/1 var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--m1); }
+  .lower .n { font: 700 64px/1 var(--display); text-transform: uppercase; }
+  .lower .d { font: 500 20px/1.2 var(--mono); color: var(--muted); }
+  .title-card { position: fixed; z-index: 4; inset: 0; display: grid; place-content: center; text-align: center; pointer-events: none; gap: 14px; }
+  .title-card .e { font: 600 22px/1 var(--display); letter-spacing: .3em; text-transform: uppercase; color: var(--m1); }
+  .title-card .t { font: 700 150px/.85 var(--display); text-transform: uppercase; }
+  .title-card .f { font: 500 24px/1 var(--mono); color: var(--muted); }
+  .title-card.end { place-content: start; text-align: left; padding: 80px 0 0 72px; }
+  .title-card.end .t { font-size: 110px; }
+
+  body.render .dock, body.render .card, body.render .gauge, body.render .hud { display: none !important; }
+  body.render .credit { font-size: 15px; left: 72px; bottom: 32px; }
+  body.render .lbl { font-size: 19px; }
+  body.render .lbl.major { font-size: 22px; }
+
+  @media (max-width: 720px) {
+    .dock { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 34px); left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); width: auto; gap: 12px; padding: 12px; }
+    .dock .group.extra, .gauge { display: none; }
+    .lines { grid-template-columns: 1fr 1fr; }
+    .line-toggle small { display: none; }
+    .card { bottom: auto; top: calc(env(safe-area-inset-top, 0px) + 150px); }
+    .lower { left: 20px; bottom: 260px; } .lower .n { font-size: 40px; }
+  }
+</style>
+
+<div id="stage"></div>
+<div id="labels"></div>
+
+<header class="hud">
+  <div class="eyebrow">Helsingin metro · Helsingfors metro</div>
+  <h1>Helsinki Metro</h1>
+  <div class="facts"><span><b>30</b> stations</span><span><b>2</b> lines</span><span><b>≈43</b> km</span><span>deepest <b>≈32 m</b> under rock</span></div>
+</header>
+
+<aside class="dock" aria-label="View controls">
+  <div class="group">
+    <div class="glabel">Lines</div>
+    <div class="lines">
+      <button class="line-toggle" id="tgl-m1" aria-pressed="true"><span class="badge b1">M1</span><span>Kivenlahti – Vuosaari<small>Western and eastern branch</small></span></button>
+      <button class="line-toggle" id="tgl-m2" aria-pressed="true"><span class="badge b2">M2</span><span>Tapiola – Mellunmäki<small>Northeast branch</small></span></button>
+    </div>
+  </div>
+  <div class="group extra">
+    <div class="row"><label class="glabel" for="depth">Depth exaggeration</label><span class="val" id="depth-val">×40</span></div>
+    <input type="range" id="depth" min="5" max="100" step="5" value="40">
+    <div class="checks">
+      <label><input type="checkbox" id="opt-labels" checked> Labels</label>
+      <label><input type="checkbox" id="opt-trains" checked> Trains</label>
+      <label><input type="checkbox" id="opt-spin"> Auto-rotate</label>
+    </div>
+  </div>
+  <div class="btns">
+    <button class="btn primary" id="ride">Ride M1</button>
+    <button class="btn" id="reset">Reset view</button>
+  </div>
+  <p class="hint">Drag to rotate, scroll or pinch to zoom, right-drag to pan. Click a station for details.</p>
+</aside>
+
+<section class="card" id="card" hidden aria-live="polite">
+  <button class="close" id="card-close" aria-label="Close station details">✕</button>
+  <div class="chips" id="card-chips"></div>
+  <h2 id="card-name"></h2>
+  <dl>
+    <dt>Platform</dt><dd id="card-depth"></dd>
+    <dt>Type</dt><dd id="card-type"></dd>
+    <dt>Position</dt><dd id="card-pos"></dd>
+  </dl>
+</section>
+
+<div class="gauge" id="gauge">Vertical scale ×40<br>Ground level = map surface</div>
+<div class="lower" id="lower" hidden><div class="k" id="lower-k">Now passing</div><div class="n" id="lower-n"></div><div class="d" id="lower-d"></div></div>
+<div class="title-card" id="title-card" hidden><div class="e">Helsingin metro · Helsingfors metro</div><div class="t">Helsinki<br>Metro</div><div class="f" id="title-f">30 stations · 2 lines · ≈43 km</div></div>
+<div class="credit">Coastline © OpenStreetMap contributors (ODbL), via geo-maps. Station positions and platform depths are approximate; depth is exaggerated.</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+/*LAND*/
+
+// name, lat, lon, platform level in metres relative to ground (negative = underground). Approximate.
+const STATIONS = [
+  ['Kivenlahti', 60.1514, 24.6440, -30], ['Espoonlahti', 60.1488, 24.6577, -25], ['Soukka', 60.1404, 24.6727, -32],
+  ['Kaitaa', 60.1533, 24.6958, -28], ['Finnoo', 60.1605, 24.7237, -25], ['Matinkylä', 60.1598, 24.7385, -25],
+  ['Niittykumpu', 60.1710, 24.7631, -25], ['Urheilupuisto', 60.1758, 24.7836, -27], ['Tapiola', 60.1757, 24.8052, -30],
+  ['Aalto-yliopisto', 60.1844, 24.8259, -25], ['Keilaniemi', 60.1769, 24.8366, -28], ['Koivusaari', 60.1633, 24.8559, -32],
+  ['Lauttasaari', 60.1590, 24.8789, -30], ['Ruoholahti', 60.1636, 24.9147, -25], ['Kamppi', 60.1688, 24.9316, -30],
+  ['Rautatientori', 60.1709, 24.9418, -25], ['Helsingin yliopisto', 60.1700, 24.9496, -25], ['Hakaniemi', 60.1792, 24.9511, -20],
+  ['Sörnäinen', 60.1874, 24.9605, -20], ['Kalasatama', 60.1876, 24.9772, 4], ['Kulosaari', 60.1879, 25.0072, 2],
+  ['Herttoniemi', 60.1951, 25.0303, 0], ['Siilitie', 60.2050, 25.0442, 0], ['Itäkeskus', 60.2103, 25.0817, 6],
+  ['Puotila', 60.2141, 25.0942, 0], ['Rastila', 60.2067, 25.1215, 0], ['Vuosaari', 60.2075, 25.1435, 6],
+  ['Myllypuro', 60.2247, 25.0767, 0], ['Kontula', 60.2358, 25.0823, 0], ['Mellunmäki', 60.2384, 25.1105, 0],
+];
+const IDX = Object.fromEntries(STATIONS.map((s, i) => [s[0], i]));
+const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+const LINES = {
+  M1: { color: 0xff6a13, css: 'var(--m1)', stops: [...range(0, 23), IDX.Puotila, IDX.Rastila, IDX.Vuosaari], side: 1, trains: 7 },
+  M2: { color: 0xffb547, css: 'var(--m2)', stops: [...range(IDX.Tapiola, IDX.Itäkeskus), IDX.Myllypuro, IDX.Kontula, IDX.Mellunmäki], side: -1, trains: 4 },
+};
+const CROWDED = new Set(['Kamppi', 'Helsingin yliopisto', 'Kalasatama', 'Urheilupuisto', 'Finnoo', 'Puotila']);
+const MAJOR = new Set(['Kivenlahti', 'Tapiola', 'Rautatientori', 'Itäkeskus', 'Vuosaari', 'Mellunmäki']);
+const LAT0 = 60.1709, LON0 = 24.9418, KX = Math.cos(LAT0 * Math.PI / 180) * 111.32, KZ = 110.57;
+const toXZ = (lat, lon) => [(lon - LON0) * KX, -(lat - LAT0) * KZ];
+const linesOf = i => Object.keys(LINES).filter(k => LINES[k].stops.includes(i));
+
+// ---------- renderer ----------
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x090d10, 1);
+stage.appendChild(renderer.domElement);
+const labelRenderer = new CSS2DRenderer({ element: document.getElementById('labels') });
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x090d10);
+scene.fog = new THREE.FogExp2(0x090d10, 0.03);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.05, 300);
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.35, 0.4);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI * 0.62; controls.minDistance = 1.5; controls.maxDistance = 120;
+controls.autoRotateSpeed = 0.5;
+
+function resize(w = innerWidth, h = innerHeight) {
+  renderer.setSize(w, h); labelRenderer.setSize(w, h); composer.setSize(w, h);
+  bloom.resolution.set(w, h); camera.aspect = w / h;
+  // keep the network centred in the space the panels leave free
+  if (renderMode) camera.clearViewOffset(); else camera.setViewOffset(w, h, w > 720 ? 150 : 0, w > 720 ? 0 : 50, w, h);
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', () => { if (!renderMode) resize(); });
+
+// ---------- ground: sea, land, coastline ----------
+// ground materials fade out toward the edge of the mapped area
+const CENTER = new THREE.Vector2(-2.6, -1.8);
+function fadeMat(color, opacity) {
+  return new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    uniforms: { color: { value: new THREE.Color(color) }, opacity: { value: opacity }, center: { value: CENTER } },
+    vertexShader: `varying vec2 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.); vW = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+    fragmentShader: `uniform vec3 color; uniform float opacity; uniform vec2 center; varying vec2 vW;
+      void main(){ vec2 d = vW - center; d.y *= 1.3; float f = 1. - smoothstep(16., 22., length(d)); gl_FragColor = vec4(color, opacity * f); }`,
+  });
+}
+const sea = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), fadeMat(0x0b1822, 0.6));
+sea.rotation.x = -Math.PI / 2; sea.position.set(0, -0.004, 0); sea.renderOrder = 1;
+scene.add(sea);
+const landMat = fadeMat(0x1c2826, 0.5);
+const coastMat = fadeMat(0x4d6460, 0.9);
+const ground = new THREE.Group();
+for (const ring of LAND) {
+  const shape = new THREE.Shape(ring.map(([x, z]) => new THREE.Vector2(x, -z)));
+  const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), landMat);
+  m.rotation.x = -Math.PI / 2; m.renderOrder = 2; ground.add(m);
+  const pts = ring.map(([x, z]) => new THREE.Vector3(x, 0.002, z));
+  ground.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), coastMat));
+}
+scene.add(ground);
+
+// bedrock floor grid, far below the tunnels
+const grid = new THREE.Group();  // placeholder kept so depth rebuilds stay simple
+
+// ---------- network (rebuilt when depth exaggeration changes) ----------
+const net = new THREE.Group(); scene.add(net);
+const lineState = {};      // per line: curve, tubes, trains, knot arc fractions
+const stationObjs = [];    // per station: { group, label, hit }
+let depthScale = 40;       // vertical exaggeration
+const yOf = m => m * depthScale / 1000;   // metres -> km units, exaggerated
+const SEG = 900;
+
+function arcTable(curve, knots) {
+  const N = 3000, pts = [], acc = [0];
+  for (let i = 0; i <= N; i++) pts.push(curve.getPoint(i / N));
+  for (let i = 1; i <= N; i++) acc.push(acc[i - 1] + pts[i].distanceTo(pts[i - 1]));
+  const L = acc[N];
+  return { length: L, knotS: range(0, knots - 1).map(k => acc[Math.round(k / (knots - 1) * N)] / L) };
+}
+
+function buildNetwork() {
+  net.clear();
+  stationObjs.forEach(s => s.label.element.remove());
+  stationObjs.length = 0;
+  grid.position.y = yOf(-46);
+
+  // lateral offset so M1 and M2 run side by side where they share track
+  const shared = new Set(LINES.M2.stops.filter(i => LINES.M1.stops.includes(i)));
+  const base = STATIONS.map(([, la, lo, d]) => { const [x, z] = toXZ(la, lo); return new THREE.Vector3(x, yOf(d), z); });
+
+  for (const [key, L] of Object.entries(LINES)) {
+    const pts = L.stops.map((si, k) => {
+      const p = base[si].clone();
+      if (shared.has(si)) {
+        const a = base[L.stops[Math.max(0, k - 1)]], b = base[L.stops[Math.min(L.stops.length - 1, k + 1)]];
+        const t = new THREE.Vector3().subVectors(b, a).setY(0).normalize();
+        p.add(new THREE.Vector3(-t.z, 0, t.x).multiplyScalar(0.07 * L.side));
+      }
+      return p;
+    });
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+    const core = new THREE.Mesh(new THREE.TubeGeometry(curve, SEG, 0.035, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(L.color).multiplyScalar(1.25) }));
+    const glow = new THREE.Mesh(new THREE.TubeGeometry(curve, SEG, 0.09, 8), new THREE.MeshBasicMaterial({ color: L.color, transparent: true, opacity: 0.15, depthWrite: false }));
+    // faint ghost of the route projected on the surface
+    const shadowPts = curve.getSpacedPoints(400).map(p => new THREE.Vector3(p.x, 0.006, p.z));
+    const shadow = new THREE.Line(new THREE.BufferGeometry().setFromPoints(shadowPts), new THREE.LineDashedMaterial({ color: L.color, transparent: true, opacity: 0.35, dashSize: 0.12, gapSize: 0.1 }));
+    shadow.computeLineDistances();
+    // translucent wall from the surface trace down to the tunnel, so depth reads at a glance
+    const cPos = [], cV = [], cIdx = [];
+    curve.getSpacedPoints(SEG).forEach((p, k) => {
+      cPos.push(p.x, p.y, p.z, p.x, 0, p.z); cV.push(1, 0);
+      if (k < SEG) { const a = k * 2; cIdx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    });
+    const cg = new THREE.BufferGeometry();
+    cg.setAttribute('position', new THREE.Float32BufferAttribute(cPos, 3));
+    cg.setAttribute('v', new THREE.Float32BufferAttribute(cV, 1));
+    cg.setIndex(cIdx);
+    const curtain = new THREE.Mesh(cg, new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, side: THREE.DoubleSide, uniforms: { color: { value: new THREE.Color(L.color) } },
+      vertexShader: `attribute float v; varying float vv; void main(){ vv = v; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
+      fragmentShader: `uniform vec3 color; varying float vv; void main(){ gl_FragColor = vec4(color, .03 + .12 * vv * vv); }`,
+    }));
+    const g = new THREE.Group(); g.add(core, glow, shadow, curtain); net.add(g);
+    const trains = [];
+    for (let i = 0; i < L.trains; i++) {
+      const tr = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.04, 0.05), new THREE.MeshBasicMaterial({ color: 0xfff4e6 }));
+      g.add(tr); trains.push(tr);
+    }
+    lineState[key] = { curve, core, glow, shadow, curtain, group: g, trains, ...arcTable(curve, pts.length), visible: lineState[key]?.visible ?? true };
+    g.visible = lineState[key].visible;
+  }
+
+  STATIONS.forEach(([name, , , d], i) => {
+    const p = base[i];
+    const grp = new THREE.Group(); grp.position.copy(p);
+    const lines = linesOf(i);
+    const col = lines.length > 1 ? 0xffffff : LINES[lines[0]].color;
+    // platform hall, aligned with the track direction
+    const nb = base[i + 1 < STATIONS.length && linesOf(i + 1).some(l => lines.includes(l)) ? i + 1 : i - 1];
+    const hall = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, lines.length > 1 ? 0.26 : 0.14), new THREE.MeshBasicMaterial({ color: 0x2b3438, transparent: true, opacity: 0.9 }));
+    hall.rotation.y = -Math.atan2(nb.z - p.z, nb.x - p.x);
+    const node = new THREE.Mesh(new THREE.SphereGeometry(0.075, 20, 14), new THREE.MeshBasicMaterial({ color: col }));
+    grp.add(hall, node);
+    // access shaft to the surface + surface marker
+    if (Math.abs(p.y) > 0.01) {
+      const shaft = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -p.y, 0)]),
+        new THREE.LineDashedMaterial({ color: 0x9fb0b4, transparent: true, opacity: 0.45, dashSize: 0.05, gapSize: 0.04 }));
+      shaft.computeLineDistances(); grp.add(shaft);
+    }
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.07, 0.1, 28), new THREE.MeshBasicMaterial({ color: 0x9fb0b4, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = -p.y + 0.008; grp.add(ring);
+    const hit = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }));
+    hit.userData.station = i; grp.add(hit);
+    const el = document.createElement('div');
+    el.className = 'lbl' + (MAJOR.has(name) ? ' major' : '');
+    el.textContent = name;
+    const label = new CSS2DObject(el); label.position.set(0, Math.max(0.12, -p.y + 0.12), 0); grp.add(label);
+    net.add(grp);
+    stationObjs.push({ group: grp, label, hit, name, depth: d, pos: p, node });
+  });
+}
+buildNetwork();
+
+// ---------- per-frame updates ----------
+const tmpV = new THREE.Vector3(), tmpT = new THREE.Vector3();
+function updateTrains(t, show = true) {
+  for (const [key, L] of Object.entries(LINES)) {
+    const st = lineState[key];
+    st.trains.forEach((tr, i) => {
+      tr.visible = show;
+      if (!show) return;
+      const speed = 0.9 / st.length * 1.0;             // km per second, sped up
+      let u = (t * speed * 6 + i / st.trains.length * 2) % 2;
+      const back = u > 1; if (back) u = 2 - u;
+      st.curve.getPointAt(u, tmpV); st.curve.getTangentAt(u, tmpT);
+      const side = new THREE.Vector3(-tmpT.z, 0, tmpT.x).normalize().multiplyScalar(back ? -0.03 : 0.03);
+      tr.position.copy(tmpV).add(side);
+      tr.lookAt(tmpV.clone().add(side).add(tmpT));
+      tr.rotateY(Math.PI / 2);
+    });
+  }
+}
+let labelsOn = true;
+function updateLabels(farThreshold = 30) {
+  const d = camera.position.distanceTo(controls.target);
+  stationObjs.forEach(s => {
+    s.label.visible = labelsOn;
+    s.label.element.classList.toggle('dim', (d > farThreshold && !MAJOR.has(s.name)) || (d > farThreshold * 0.6 && CROWDED.has(s.name)));
+  });
+}
+
+// ---------- interaction ----------
+const $ = id => document.getElementById(id);
+const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2();
+let fly = null;  // camera tween
+function flyTo(target, pos, dur = 1.4) {
+  fly = { t0: performance.now(), dur: dur * 1000, fromT: controls.target.clone(), toT: target.clone(), fromP: camera.position.clone(), toP: pos.clone() };
+}
+function stationAt(ev) {
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(stationObjs.map(s => s.hit));
+  return hits.length ? hits[0].object.userData.station : null;
+}
+function showStation(i) {
+  const s = stationObjs[i];
+  $('card-name').textContent = s.name;
+  $('card-chips').innerHTML = linesOf(i).map(l => `<span style="background:${LINES[l].css}">${l}</span>`).join('');
+  $('card-depth').textContent = s.depth < -2 ? `≈ ${-s.depth} m below ground` : s.depth > 2 ? `≈ ${s.depth} m above ground` : 'Ground level';
+  $('card-type').textContent = s.depth < -2 ? 'Underground, in bedrock' : s.depth > 2 ? 'Elevated' : 'At ground level';
+  $('card-pos').textContent = `${STATIONS[i][1].toFixed(4)}° N, ${STATIONS[i][2].toFixed(4)}° E`;
+  $('card').hidden = false;
+  const p = s.pos;
+  flyTo(new THREE.Vector3(p.x, p.y * 0.5, p.z), new THREE.Vector3(p.x - 2.2, Math.max(p.y, 0) + 2.2, p.z + 3.2));
+}
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
+  const i = stationAt(e); if (i !== null) { stopRide(); showStation(i); }
+});
+renderer.domElement.addEventListener('pointermove', e => { if (!renderMode) renderer.domElement.style.cursor = stationAt(e) !== null ? 'pointer' : 'grab'; });
+$('card-close').onclick = () => { $('card').hidden = true; };
+
+for (const key of Object.keys(LINES)) {
+  const btn = $('tgl-' + key.toLowerCase());
+  btn.onclick = () => {
+    const on = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', on); lineState[key].visible = on; lineState[key].group.visible = on;
+  };
+}
+$('depth').oninput = e => {
+  depthScale = +e.target.value; $('depth-val').textContent = '×' + depthScale;
+  $('gauge').innerHTML = `Vertical scale ×${depthScale}<br>Ground level = map surface`;
+  buildNetwork();
+  for (const key of Object.keys(LINES)) lineState[key].group.visible = lineState[key].visible;
+};
+$('opt-labels').onchange = e => { labelsOn = e.target.checked; };
+let trainsOn = true; $('opt-trains').onchange = e => { trainsOn = e.target.checked; };
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+$('opt-spin').onchange = e => { controls.autoRotate = e.target.checked; };
+
+// fit the whole network: from the south on wide screens, end-on from the west on tall ones
+const HOME_T = new THREE.Vector3(-2.6, -0.4, -1.8), HOME_P = new THREE.Vector3();
+function fitHome(aspect, dockRoom = 0) {
+  const tall = aspect < 1;
+  const dir = tall ? new THREE.Vector3(-0.72, 0.55, 0.42).normalize() : new THREE.Vector3(0, 0.6, 0.8);
+  const halfW = tall ? 12 : 15.5;
+  const hfov = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * aspect);
+  const dist = halfW / Math.tan(hfov / 2) * (1 + dockRoom);
+  HOME_P.copy(HOME_T).addScaledVector(dir, dist);
+}
+$('reset').onclick = () => { stopRide(); $('card').hidden = true; flyTo(HOME_T, HOME_P); };
+
+// ---------- ride along M1 ----------
+let ride = null;
+const RIDE_SECONDS = 48;
+function nearestStop(key, s) {
+  const st = lineState[key], stops = LINES[key].stops;
+  let k = st.knotS.findIndex(v => v > s + 0.004); if (k < 0) k = stops.length;
+  return { next: stops[Math.min(k, stops.length - 1)], prev: stops[Math.max(0, k - 1)], k };
+}
+function rideCamera(key, s, lookAhead = 0.02) {
+  const c = lineState[key].curve;
+  const p = c.getPointAt(Math.min(1, s)), q = c.getPointAt(Math.min(1, s + lookAhead));
+  const dir = new THREE.Vector3().subVectors(q, p).setY(0).normalize();
+  const side = new THREE.Vector3(-dir.z, 0, dir.x);
+  const pos = p.clone().addScaledVector(dir, -3.0).addScaledVector(side, 2.1).setY(Math.max(p.y, 0) + 1.5);
+  return { pos, target: q.clone().setY(q.y * 0.7) };
+}
+function setLower(key, s, kicker) {
+  const { next, prev } = nearestStop(key, s);
+  const st = lineState[key];
+  const kPrev = LINES[key].stops.indexOf(prev);
+  const atStation = Math.abs(st.knotS[kPrev] - s) < 0.01;
+  const i = atStation ? prev : next;
+  $('lower-k').textContent = kicker ?? (atStation ? `${key} · Station` : `${key} · Next station`);
+  $('lower-n').textContent = STATIONS[i][0];
+  const d = STATIONS[i][3];
+  $('lower-d').textContent = d < -2 ? `Platform ≈ ${-d} m below ground` : d > 2 ? `Elevated ≈ ${d} m` : 'At ground level';
+}
+function startRide() {
+  $('card').hidden = true; controls.enabled = false; controls.autoRotate = false;
+  ride = { t0: performance.now() }; $('lower').hidden = false; $('ride').textContent = 'Stop ride';
+}
+function stopRide() {
+  if (!ride) return;
+  ride = null; controls.enabled = true; $('lower').hidden = true; $('ride').textContent = 'Ride M1';
+  controls.autoRotate = $('opt-spin').checked;
+}
+$('ride').onclick = () => ride ? stopRide() : startRide();
+addEventListener('keydown', e => { if (e.key === 'Escape') stopRide(); });
+
+// ---------- interactive loop ----------
+let renderMode = false;
+const clock = new THREE.Clock();
+function loop() {
+  if (renderMode) return;
+  requestAnimationFrame(loop);
+  const t = clock.getElapsedTime();
+  if (fly) {
+    const k = Math.min(1, (performance.now() - fly.t0) / fly.dur), e = k < .5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2;
+    controls.target.lerpVectors(fly.fromT, fly.toT, e); camera.position.lerpVectors(fly.fromP, fly.toP, e);
+    if (k >= 1) fly = null;
+  }
+  if (ride) {
+    const s = Math.min(1, (performance.now() - ride.t0) / 1000 / RIDE_SECONDS);
+    const { pos, target } = rideCamera('M1', s);
+    camera.position.lerp(pos, 0.08); controls.target.lerp(target, 0.08);
+    setLower('M1', s);
+    if (s >= 1) { stopRide(); flyTo(HOME_T, HOME_P, 2); }
+  } else controls.update();
+  camera.lookAt(controls.target);
+  updateTrains(t, trainsOn);
+  updateLabels();
+  composer.render(); labelRenderer.render(scene, camera);
+}
+resize();
+fitHome(camera.aspect, innerWidth > 720 ? 0.3 : 0);
+camera.position.copy(HOME_P); controls.target.copy(HOME_T);
+if (!reduced) { controls.autoRotate = false; }
+loop();
+
+// ---------- showcase render mode (used to render the video frame by frame) ----------
+const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const clamp01 = v => Math.min(1, Math.max(0, v));
+const rng = (t, a, b) => clamp01((t - a) / (b - a));
+window.enterRenderMode = (w = 1920, h = 1080) => {
+  renderMode = true; document.body.classList.add('render'); controls.enabled = false;
+  $('card').hidden = true;
+  resize(w, h); renderer.setPixelRatio(1); resize(w, h);
+};
+const SHOW = { draw: [2.6, 7.2], ride: [7.4, 21.5], rise: [21.5, 25], end: 30 };
+const WIDE_T = new THREE.Vector3(-2.6, -0.4, -2.2), WIDE_P = new THREE.Vector3(-2.6, 15.5, 19.5);
+window.renderFrame = t => {
+  // title card
+  const tc = $('title-card');
+  const titleA = rng(t, 0.2, 1.2) * (1 - rng(t, 4.6, 5.6));
+  const endA = rng(t, 26.2, 27.4);
+  tc.hidden = titleA <= 0 && endA <= 0;
+  tc.style.opacity = Math.max(titleA, endA);
+  tc.classList.toggle('end', endA > 0);
+  $('title-f').textContent = endA > 0 ? 'M1 Kivenlahti – Vuosaari · M2 Tapiola – Mellunmäki' : '30 stations · 2 lines · ≈43 km';
+
+  // ground fades up, network draws in
+  landMat.uniforms.opacity.value = 0.5 * ease(rng(t, 0, 1.6)); coastMat.uniforms.opacity.value = 0.9 * ease(rng(t, 0.2, 1.8));
+  const g = ease(rng(t, ...SHOW.draw));
+  const m1 = lineState.M1, m2 = lineState.M2;
+  const tapS = m1.knotS[IDX.Tapiola];
+  const g2 = clamp01((g - tapS) / (1 - tapS));
+  for (const [st, f] of [[m1, g], [m2, g2]]) {
+    const n = Math.round(f * SEG) * 8 * 6;
+    st.core.geometry.setDrawRange(0, n); st.glow.geometry.setDrawRange(0, n);
+    st.shadow.material.opacity = 0.35 * f;
+    st.curtain.geometry.setDrawRange(0, Math.round(f * SEG) * 6);
+  }
+  stationObjs.forEach((s, i) => {
+    const on = linesOf(i).some(k => { const ks = lineState[k].knotS[LINES[k].stops.indexOf(i)]; return (k === 'M1' ? g : g2) >= ks - 0.002 && (k === 'M1' ? g : g2) > 0; });
+    s.group.visible = on; s.node.scale.setScalar(on ? 1 : 0.01);
+  });
+
+  // camera: overview → ride along M1 → rise at Itäkeskus → wide orbit
+  const orbitA = t * 0.035;
+  const overP = new THREE.Vector3(-3 + Math.sin(orbitA) * 3, 14 - t * 0.2, 16);
+  let pos = overP, target = WIDE_T.clone();
+  const itS = m1.knotS[IDX.Itäkeskus];
+  const rs = ease(rng(t, ...SHOW.ride)) * itS;
+  if (t >= SHOW.ride[0] - 1.6) {
+    const r = rideCamera('M1', rs);
+    const k = ease(rng(t, SHOW.ride[0] - 1.6, SHOW.ride[0] + 0.6));
+    pos = overP.clone().lerp(r.pos, k); target = WIDE_T.clone().lerp(r.target, k);
+  }
+  if (t >= SHOW.rise[0]) {
+    const it = stationObjs[IDX.Itäkeskus].pos;
+    const k = ease(rng(t, ...SHOW.rise));
+    const r = rideCamera('M1', itS);
+    pos = r.pos.clone().lerp(new THREE.Vector3(it.x - 5, 6.5, it.z + 7), k);
+    target = r.target.clone().lerp(new THREE.Vector3(it.x + 1.2, 0, it.z - 0.6), k);
+  }
+  if (t >= SHOW.rise[1]) {
+    const it = stationObjs[IDX.Itäkeskus].pos;
+    const k = ease(rng(t, SHOW.rise[1], SHOW.end - 1));
+    const a = (t - SHOW.rise[1]) * 0.05;
+    const wp = new THREE.Vector3(WIDE_P.x + Math.sin(a) * 3, WIDE_P.y, WIDE_P.z - Math.sin(a) * 1.5);
+    pos = new THREE.Vector3(it.x - 5, 6.5, it.z + 7).lerp(wp, k);
+    target = new THREE.Vector3(it.x + 1.2, 0, it.z - 0.6).lerp(WIDE_T, k);
+  }
+  camera.position.copy(pos); controls.target.copy(target); camera.lookAt(target);
+  camera.updateMatrixWorld();
+
+  // lower third during the ride and the fork
+  const lower = $('lower');
+  const lowA = rng(t, SHOW.ride[0] + 0.4, SHOW.ride[0] + 1.2) * (1 - rng(t, SHOW.rise[1] - 0.4, SHOW.rise[1] + 0.4));
+  lower.hidden = lowA <= 0; lower.style.opacity = lowA;
+  if (t < SHOW.rise[0]) setLower('M1', rs);
+  else { $('lower-k').textContent = 'Itäkeskus · the lines split'; $('lower-n').textContent = 'M1 → Vuosaari'; $('lower-d').textContent = 'M2 → Mellunmäki'; }
+
+  updateTrains(t, t > SHOW.draw[1] - 0.5);
+  updateLabels(t > SHOW.rise[1] ? 20 : 26);
+  stationObjs.forEach(s => { s.label.element.style.opacity = s.group.visible ? '' : 0; });
+  composer.render(); labelRenderer.render(scene, camera);
+};
+window.FPS = 30; window.FRAMES = SHOW.end * 30;
+window.sceneReady = true;
+</script>
