@@ -30,7 +30,7 @@ await page.route('https://fonts.gstatic.com/**', r => {
   existsSync(f) ? r.fulfill({ body: readFileSync(f), contentType: 'font/woff2' }) : r.continue();
 });
 await page.goto('file://' + join(here, 'standalone.html'));
-await page.waitForFunction('window.sceneReady === true', null, { timeout: 30000 });
+await page.waitForFunction('window.sceneReady === true', null, { timeout: 180000 });
 await page.evaluate(() => document.fonts.ready);
 
 if (interactive) {
@@ -38,7 +38,7 @@ if (interactive) {
   await page.screenshot({ path: `${out}/interactive.png` });
   await page.setViewportSize({ width: 400, height: 860 });
   await page.reload();
-  await page.waitForFunction('window.sceneReady === true', null, { timeout: 30000 });
+  await page.waitForFunction('window.sceneReady === true', null, { timeout: 180000 });
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${out}/phone.png` });
 } else {
@@ -47,8 +47,15 @@ if (interactive) {
   const list = mode ? mode.split(',').map(Number) : [...Array(total).keys()];
   const t0 = Date.now();
   for (const f of list) {
-    await page.evaluate(t => window.renderFrame(t), f / fps);
-    await page.screenshot({ path: `${out}/f${String(f).padStart(4, '0')}.png` });
+    const file = `${out}/f${String(f).padStart(4, '0')}.png`;
+    if (existsSync(file)) continue;                      // resume: skip frames already rendered
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await page.evaluate(t => window.renderFrame(t), f / fps);
+        await page.screenshot({ path: file, timeout: 180000 });
+        break;
+      } catch (e) { if (attempt >= 2) throw e; console.log('retry frame', f, e.message.split('\n')[0]); }
+    }
     if (f % 90 === 0) console.log(`frame ${f}/${total} ${((Date.now() - t0) / 1000).toFixed(0)}s`);
   }
 }

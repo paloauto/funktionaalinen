@@ -1,7 +1,8 @@
 # Helsinki Metro Animated
 
 - **`standalone.html`**: the interactive site, a lit cutaway diorama. Grass, water and illustrative buildings sit on top; the bedrock is cut open along the underground route to show the tunnels, track and platforms. Rotate it, toggle M1/M2, change depth exaggeration, click stations, or press **Ride M1** to follow a train. Three.js and fonts load from CDNs.
-- **`helsinki-metro-animated.mp4`**: 36 s showcase video, 1920×1080 at 30 fps. It follows an M300-style train from Kivenlahti via Tapiola and Rautatientori to Itäkeskus.
+- **`helsinki-metro-animated.mp4`**: 2 min showcase video, 1920×1080 at 30 fps. A train runs the whole of M1 (27 stations), then a second train runs the M2 branch to Mellunmäki, so every station is visited. At nine key stations the camera zooms in while doors open and passengers get off and on.
+- **`helsinki-metro-animated-x.mp4`**: the same video encoded for posting on X (H.264 High, about 4.5 Mbps, about 68 MB).
 
 Trains run a timetable: each run between stations is eased in and out (sine ease) with a short dwell at the platform. Camera moves and text plates use cubic ease-in-out. For visibility, trains are drawn about 4× real size and buildings 4× taller.
 
@@ -24,7 +25,7 @@ Both come from one scene. `window.renderFrame(t)` drives the showcase timeline d
 npm install
 python3 build.py
 node render.mjs shots interactive     # desktop + phone screenshots
-node render.mjs frames                # all 1080 showcase frames
+node render.mjs frames                # all showcase frames (resumable: existing frames are skipped)
 ffmpeg -framerate 30 -i frames/f%04d.png -c:v libx264 -crf 18 -pix_fmt yuv420p helsinki-metro-animated.mp4
 ```
 

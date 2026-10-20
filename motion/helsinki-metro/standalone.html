@@ -394,6 +394,10 @@ function buildCity(routePts) {
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), col = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
   const bCols = [0xc9c2b4, 0xbab4a8, 0xa9aeb2, 0xd2cbbd, 0xb8a58c, 0x969b9f, 0xc4b9a5, 0x9c6e55];
   let nb = 0, nt = 0, guard = 0;
+  const occ = new Map(), oc = 0.12;   // occupancy grid of placed footprints (x, z, radius)
+  const free = (x, z, r) => { const cx = Math.floor(x / oc), cz = Math.floor(z / oc);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const [px, pz, pr] of occ.get(`${cx + i},${cz + j}`) || []) if ((px - x) ** 2 + (pz - z) ** 2 < (pr + r) ** 2) return false; return true; };
+  const take = (x, z, r) => { const k = `${Math.floor(x / oc)},${Math.floor(z / oc)}`; (occ.get(k) || occ.set(k, []).get(k)).push([x, z, r]); };
   while ((nb < B || nt < T) && guard++ < 400000) {
     const x = RECT.x0 + .3 + rnd() * (RECT.w - .6), z = RECT.z0 + .3 + rnd() * (RECT.h - .6);
     const u = urbanAt(x, z);
@@ -402,11 +406,13 @@ function buildCity(routePts) {
     if (!inLand(x, z) || !clear(x, z, wantB ? .27 : .2)) continue;
     if (wantB) {
       const h = (.025 + rnd() * .05) * (1 + u * 1.8), sx = .04 + rnd() * .07, sz = .04 + rnd() * .07;
+      const r = Math.hypot(sx, sz) / 2 + .004; if (!free(x, z, r)) continue; take(x, z, r);
       q.setFromAxisAngle(up, (rnd() < .7 ? .45 : 0) + Math.floor(rnd() * 2) * Math.PI / 2 + (rnd() - .5) * .2);
       m4.compose(new THREE.Vector3(x, 0, z), q, new THREE.Vector3(sx, h, sz));
       bm.setMatrixAt(nb, m4); bm.setColorAt(nb, col.setHex(bCols[Math.floor(rnd() * bCols.length)])); nb++;
     } else {
       const s = .032 + rnd() * .035;
+      if (!free(x, z, s * .5)) continue; take(x, z, s * .5);
       m4.compose(new THREE.Vector3(x, 0, z), q.identity(), new THREE.Vector3(s, s * (1.6 + rnd()), s));
       tm.setMatrixAt(nt, m4); tm.setColorAt(nt, col.setRGB(.09 + rnd() * .06, .2 + rnd() * .1, .08 + rnd() * .05)); nt++;
     }
@@ -424,7 +430,8 @@ let depthScale = 40;
 const yOf = m => m * depthScale / 1000;
 const trackY = m => yOf(m) + (m >= 0 ? 0.03 : 0);
 const SEG = 1400;
-const TRACK = 0.022;            // lateral offset of each running track from the line centre
+const TRACK = 0.03;             // lateral offset of each running track from the line centre (island platform between)
+const EXT = 0.5;                // tail track beyond each terminus so a whole train fits at the platform
 const concreteMat = new THREE.MeshStandardMaterial({ map: concreteTex, roughness: .85, side: THREE.DoubleSide });
 const ballastMat = new THREE.MeshStandardMaterial({ color: 0x6d6a66, roughness: 1 });
 const railMat = new THREE.MeshStandardMaterial({ color: 0x8c9196, metalness: .8, roughness: .35 });
@@ -432,9 +439,16 @@ const platformMat = new THREE.MeshStandardMaterial({ color: 0xd8d5ce, roughness:
 const lampMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff2d8, emissiveIntensity: 3 });
 const glassMat = new THREE.MeshPhysicalMaterial({ color: 0xbfd4dc, roughness: .05, metalness: .1, opacity: .55, transparent: true });
 const signMat = new THREE.MeshStandardMaterial({ map: mSign, roughness: .5 });
+const stairGeo = new THREE.BoxGeometry(0.024, 0.028, 0.018), stairMat = new THREE.MeshStandardMaterial({ color: 0x4a5257, roughness: .6 });
+const platforms = {};   // 'M1:12' -> frame at that platform
 const wallTex = rockTex.clone(); wallTex.needsUpdate = true;
 const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: .95, side: THREE.DoubleSide });
 
+// extend a polyline straight past both ends (flat), giving tail track beyond each terminus
+function withTails(pts) {
+  const tail = (a, b) => a.clone().add(new THREE.Vector3().subVectors(a, b).setY(0).normalize().multiplyScalar(EXT));
+  return [tail(pts[0], pts[1]), ...pts, tail(pts[pts.length - 1], pts[pts.length - 2])];
+}
 function arcTable(curve, n) {
   const N = 3000, pts = [], acc = [0];
   for (let i = 0; i <= N; i++) pts.push(curve.getPoint(i / N));
@@ -474,13 +488,13 @@ function buildNetwork() {
   const shared = new Set(LINES.M2.stops.filter(i => LINES.M1.stops.includes(i)));
 
   // trench: follows the un-offset M1 centreline while it is underground; wide enough for both lines on the shared section
-  const centre = new THREE.CatmullRomCurve3(LINES.M1.stops.map(i => base[i]), false, 'centripetal');
-  const cTab = arcTable(centre, LINES.M1.stops.length);
+  const centre = new THREE.CatmullRomCurve3(withTails(LINES.M1.stops.map(i => base[i])), false, 'centripetal');
+  const cTab = arcTable(centre, LINES.M1.stops.length + 2); cTab.knotS = cTab.knotS.slice(1, -1);
   const sUrh = cTab.knotS[IDX.Urheilupuisto], sTap = cTab.knotS[IDX.Tapiola];
   const trenchFrames = [];
   for (let k = 0; k <= SEG; k++) {
     const s = k / SEG, f = frameAt(centre, s);
-    if (f.p.y > -0.03) break;
+    if (f.p.y > 0.02) break;          // keep the cut open until the track bed is above the ground
     f.hw = 0.1 + 0.075 * THREE.MathUtils.smoothstep(s, sUrh, sTap);
     f.top = inLand(f.p.x, f.p.z) ? 0 : -0.06;
     trenchFrames.push(f);
@@ -520,8 +534,8 @@ function buildNetwork() {
       }
       return p;
     });
-    const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
-    const tab = arcTable(curve, pts.length);
+    const curve = new THREE.CatmullRomCurve3(withTails(pts), false, 'centripetal');
+    const tab = arcTable(curve, pts.length + 2); tab.knotS = tab.knotS.slice(1, -1);   // knotS: stations only
     const frames = range(0, SEG).map(k => frameAt(curve, k / SEG));
     frames.forEach((f, k) => { if (k % 6 === 0) routePts.push(f.p); });
     const grp = new THREE.Group(); net.add(grp);
@@ -529,14 +543,14 @@ function buildNetwork() {
     const R = 0.058, half = range(0, 10).map(j => { const a = Math.PI + j / 10 * Math.PI; return [Math.cos(a) * R, Math.sin(a) * R + 0.004]; });
     for (const run of runs(frames, f => f.p.y < -0.03)) { const m = new THREE.Mesh(sweep(run, half), concreteMat); m.receiveShadow = true; grp.add(m); }
     // track bed and rails along the whole line
-    const bed = new THREE.Mesh(sweep(frames, [[-0.046, -0.03], [-0.044, -0.014], [0.044, -0.014], [0.046, -0.03]]), ballastMat);
+    const bed = new THREE.Mesh(sweep(frames, [[-0.058, -0.03], [-0.056, -0.014], [0.056, -0.014], [0.058, -0.03]]), ballastMat);
     bed.receiveShadow = true; bed.castShadow = true; grp.add(bed);
     const railFrames = frames.filter((_, k) => k % 2 === 0);
     for (const tside of [-TRACK, TRACK]) for (const r of [-0.008, 0.008]) {
       grp.add(new THREE.Mesh(sweep(railFrames, [[tside + r - .0015, -0.014], [tside + r - .0015, -0.011], [tside + r + .0015, -0.011], [tside + r + .0015, -0.014]]), railMat));
     }
     // line-coloured light strip along the tunnel wall / track edge
-    grp.add(new THREE.Mesh(sweep(frames, [[0.05, 0.004], [0.05, 0.009]]), new THREE.MeshStandardMaterial({ color: L.color, emissive: L.color, emissiveIntensity: 2.2, side: THREE.DoubleSide })));
+    grp.add(new THREE.Mesh(sweep(frames, [[0.054, 0.004], [0.054, 0.009]]), new THREE.MeshStandardMaterial({ color: L.color, emissive: L.color, emissiveIntensity: 2.2, side: THREE.DoubleSide })));
     // painted route ribbon at surface level, faded in only when the camera is far away
     const ribbonFrames = frames.filter((_, k) => k % 2 === 0).map(f => ({ ...f, p: f.p.clone().setY(f.p.y < 0 ? 0.012 : f.p.y + 0.02) }));
     const ribbonMat = new THREE.MeshBasicMaterial({ color: L.color, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
@@ -558,6 +572,7 @@ function buildNetwork() {
 }
 
 function buildStations(base) {
+  for (const k in platforms) delete platforms[k];
   STATIONS.forEach(([name, , , d], i) => {
     const lines = linesOf(i), p = base[i];
     const grp = new THREE.Group(); net.add(grp);
@@ -566,17 +581,22 @@ function buildStations(base) {
     for (const key of lines) {
       const st = lineState[key], k = LINES[key].stops.indexOf(i);
       const f = frameAt(st.curve, st.knotS[k]), yaw = -Math.atan2(f.dir.z, f.dir.x);
-      const plat = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.012, 0.011), platformMat);
+      const plat = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.012, 0.026), platformMat);
       plat.position.copy(f.p).add(new THREE.Vector3(0, -0.008, 0)); plat.rotation.y = yaw; plat.castShadow = plat.receiveShadow = true; grp.add(plat);
+      for (const e of [-1, 1]) {   // stair / escalator housings where passengers leave the platform
+        const stair = new THREE.Mesh(stairGeo, stairMat);
+        stair.position.copy(f.p).addScaledVector(f.dir, e * 0.178).add(new THREE.Vector3(0, 0.012, 0)); stair.rotation.y = yaw; stair.castShadow = true; grp.add(stair);
+      }
+      platforms[key + ':' + i] = f;
       if (d < -2) {
         for (const o of [-0.1, 0, 0.1]) {
           const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.004, 0.006), lampMat);
           lamp.position.copy(f.p).addScaledVector(f.dir, o).add(new THREE.Vector3(0, 0.05, 0)); lamp.rotation.y = yaw; grp.add(lamp);
         }
       } else {
-        const roof = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.005, 0.08), new THREE.MeshStandardMaterial({ color: 0xe9e7e2, roughness: .6 }));
+        const roof = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.005, 0.1), new THREE.MeshStandardMaterial({ color: 0xe9e7e2, roughness: .6 }));
         roof.position.copy(f.p).add(new THREE.Vector3(0, 0.055, 0)); roof.rotation.y = yaw; roof.castShadow = true; grp.add(roof);
-        for (const o of [-0.12, 0.12]) {
+        for (const o of [-0.14, 0.14]) {
           const col = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.06, 0.006), concreteMat);
           col.position.copy(f.p).addScaledVector(f.dir, o).add(new THREE.Vector3(0, 0.025, 0)); grp.add(col);
         }
@@ -584,7 +604,7 @@ function buildStations(base) {
       ef ||= f;
     }
     // street-level entrance pavilion with the M sign, set beside the cut
-    const off = d < -2 ? 0.3 : 0.14;
+    const off = d < -2 ? 0.3 : 0.22;
     const ent = new THREE.Vector3(p.x, 0, p.z).addScaledVector(ef.side, off * (lines.length === 1 && lines[0] === 'M2' ? -1 : 1));
     const yaw = -Math.atan2(ef.dir.z, ef.dir.x);
     const pav = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.035, 0.05), glassMat);
@@ -619,6 +639,13 @@ const roofGeo = new RoundedBoxGeometry(CAR.len * 0.94, CAR.h * 0.14, CAR.w * 0.8
 const bogieGeo = new THREE.BoxGeometry(0.018, 0.006, CAR.w * 0.8);
 const noseGeo = new RoundedBoxGeometry(0.014, CAR.h * 0.92, CAR.w * 0.98, 3, 0.006);
 const lightGeo = new THREE.BoxGeometry(0.003, 0.004, 0.006);
+const DOORS = [-0.026, 0, 0.026];
+const recessGeo = new THREE.BoxGeometry(0.0088, 0.021, 0.0006), leafGeo = new THREE.BoxGeometry(0.0042, 0.021, 0.0008);
+const recessMat = new THREE.MeshStandardMaterial({ color: 0x0c0e10, roughness: .9 });
+const leafMat = new THREE.MeshStandardMaterial({ color: 0xff6a24, metalness: .35, roughness: .4 });   // body-coloured leaves: an open door shows as a dark gap
+function setDoors(train, open) {
+  for (const car of train.cars) for (const { leaf, x0, lr } of car.userData.leaves) leaf.position.x = x0 + lr * open * 0.0042;
+}
 function makeTrain() {
   const group = new THREE.Group(), cars = [];
   for (let c = 0; c < 4; c++) {
@@ -628,6 +655,15 @@ function makeTrain() {
     const roof = new THREE.Mesh(roofGeo, roofMat); roof.position.y = CAR.h * 0.52;
     car.add(body, band, roof);
     for (const o of [-0.028, 0.028]) { const b = new THREE.Mesh(bogieGeo, bogieMat); b.position.set(o, -CAR.h / 2 - 0.002, 0); car.add(b); }
+    // three doors per side; local +z faces the platform. Leaves slide apart to show the dark doorway behind
+    car.userData.leaves = [];
+    for (const zs of [1, -1]) for (const dx of DOORS) {
+      const rec = new THREE.Mesh(recessGeo, recessMat); rec.position.set(dx, -0.0005, zs * (CAR.w / 2 + 0.0004)); car.add(rec);
+      for (const lr of [-1, 1]) {
+        const leaf = new THREE.Mesh(leafGeo, leafMat); leaf.position.set(dx + lr * 0.0021, -0.0005, zs * (CAR.w / 2 + 0.0009)); car.add(leaf);
+        if (zs === 1) car.userData.leaves.push({ leaf, x0: dx + lr * 0.0021, lr });
+      }
+    }
     if (c === 0 || c === 3) {
       // sloped dark cab front with lights; car 0 leads (white), car 3 trails (red)
       const sgn = c === 0 ? 1 : -1;
@@ -643,7 +679,7 @@ function placeTrain(train, curve, s, dir) {
   // dir = +1 running towards the end of the line, -1 back; trains keep to their own track
   const L = curve.getLength();
   train.cars.forEach((car, c) => {
-    const sc = s - dir * (c * (CAR.len + CAR.gap) + CAR.len / 2) / L;
+    const sc = s + dir * (1.5 - c) * (CAR.len + CAR.gap) / L;
     const f = frameAt(curve, sc);
     car.position.copy(f.p).addScaledVector(f.side, -TRACK * dir); car.position.y += -0.011 + CAR.h / 2 + 0.004;
     v1.copy(curve.getPointAt(clamp01(sc + dir * 0.0015))).sub(curve.getPointAt(clamp01(sc - dir * 0.0015)));
@@ -656,7 +692,7 @@ function placeTrain(train, curve, s, dir) {
 function buildSchedule(tab) {
   const ev = [], n = tab.knotS.length, L = tab.length;
   const travel = (a, b) => 1.3 + 1.5 * Math.sqrt(Math.abs(tab.knotS[b] - tab.knotS[a]) * L);
-  const dwell = i => (i === 0 || i === n - 1) ? 2.2 : 1.1;
+  const dwell = i => (i === 0 || i === n - 1) ? 3.6 : 2.8;
   for (let i = 0; i < n - 1; i++) { ev.push({ type: 'dwell', at: i, d: dwell(i), dir: 1 }); ev.push({ type: 'run', from: i, to: i + 1, d: travel(i, i + 1), dir: 1 }); }
   for (let i = n - 1; i > 0; i--) { ev.push({ type: 'dwell', at: i, d: dwell(i), dir: -1 }); ev.push({ type: 'run', from: i, to: i - 1, d: travel(i, i - 1), dir: -1 }); }
   let t = 0; ev.forEach(e => { e.t0 = t; t += e.d; });
@@ -668,7 +704,7 @@ function trainState(key, phase, t) {
   let lo = 0, hi = ev.length - 1;
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ev[m].t0 <= tau) lo = m; else hi = m - 1; }
   const e = ev[lo], k = (tau - e.t0) / e.d;
-  if (e.type === 'dwell') return { s: st.knotS[e.at], dir: e.dir, moving: 0, at: e.at, next: e.at + e.dir };
+  if (e.type === 'dwell') return { s: st.knotS[e.at], dir: e.dir, moving: 0, at: e.at, next: e.at + e.dir, tau: tau - e.t0, D: e.d };
   return { s: THREE.MathUtils.lerp(st.knotS[e.from], st.knotS[e.to], easeS(k)), dir: e.dir, moving: Math.sin(Math.PI * k), at: null, next: e.to };
 }
 function updateTrains(t) {
@@ -691,6 +727,84 @@ function updateLabels(farThreshold = 45, near = Infinity) {
 }
 
 buildNetwork();
+
+// ---------- passengers: idle crowds on every platform, plus boarding / alighting at the stop being watched ----------
+const PEOPLE_MAX = 600;
+const personBody = new THREE.CapsuleGeometry(0.0021, 0.0062, 3, 8); personBody.translate(0, 0.0052, 0);
+const personHead = new THREE.SphereGeometry(0.0021, 10, 8); personHead.translate(0, 0.0127, 0);
+const bodies = new THREE.InstancedMesh(personBody, new THREE.MeshStandardMaterial({ roughness: .8 }), PEOPLE_MAX);
+const heads = new THREE.InstancedMesh(personHead, new THREE.MeshStandardMaterial({ roughness: .7 }), PEOPLE_MAX);
+bodies.castShadow = heads.castShadow = true; bodies.frustumCulled = heads.frustumCulled = false;
+scene.add(bodies, heads);
+const COATS = [0x1f2a44, 0x2b2b2b, 0x6b6f73, 0xa8322d, 0xc49a2c, 0x2f5d46, 0xe8e4dc, 0x3b6ea8, 0x7a4a6e, 0x8a5a3c];
+const SKIN = [0xf1c9a5, 0xe0ac85, 0xc68a62, 0x8d5a3b, 0xf6dcc4];
+const pCol = new THREE.Color(), pMat4 = new THREE.Matrix4(), pPos = new THREE.Vector3();
+let nPeople = 0;
+// a: along the platform in the train's direction; l: across it, positive towards the watched train's track
+function putPerson(f, dir, a, l, walking, t, id) {
+  if (nPeople >= PEOPLE_MAX) return;
+  pPos.copy(f.p).addScaledVector(f.dir, a * dir).addScaledVector(f.side, -l * dir);
+  pPos.y += -0.002 + (walking ? Math.abs(Math.sin(t * 13 + id * 1.7)) * 0.0007 : 0);
+  pMat4.makeTranslation(pPos.x, pPos.y, pPos.z);
+  bodies.setMatrixAt(nPeople, pMat4); heads.setMatrixAt(nPeople, pMat4);
+  bodies.setColorAt(nPeople, pCol.setHex(COATS[id % COATS.length])); heads.setColorAt(nPeople, pCol.setHex(SKIN[(id * 7) % SKIN.length]));
+  nPeople++;
+}
+const idleCrowds = {};   // platform key -> [[a, l], ...] in the platform's own frame, spaced so nobody overlaps
+function idleFor(pk) {
+  if (idleCrowds[pk]) return idleCrowds[pk];
+  let r = [...pk].reduce((h, c) => h * 31 + c.charCodeAt(0), 7) % 2147483646 + 1; const rr = () => (r = (r * 16807) % 2147483647) / 2147483647;
+  const out = [];
+  for (let n = 0; n < 3; n++) for (let tries = 0; tries < 20; tries++) {
+    const a = -0.15 + rr() * 0.3, l = -0.008 + rr() * 0.016;
+    if (out.every(([pa, pl]) => Math.hypot(pa - a, pl - l) > 0.006)) { out.push([a, l]); break; }
+  }
+  return (idleCrowds[pk] = out);
+}
+const doorAlong = slot => (1.5 - Math.floor(slot / 3)) * (CAR.len + CAR.gap) + DOORS[slot % 3];
+// boarding and alighting at one platform; tau is time since the train stopped, D the dwell (timings authored for 5 s)
+function crowdAt(f, dir, tau, D, sd, t) {
+  const sc = D / 5;
+  let r = sd * 7919 % 2147483646 + 1; const rr = () => (r = (r * 16807) % 2147483647) / 2147483647;
+  const pick = (pool) => pool.splice(Math.floor(rr() * pool.length), 1)[0];
+  const doorPool = range(0, 11), sidePool = range(0, 23);
+  const nOff = 5 + Math.floor(rr() * 4), nOn = 5 + Math.floor(rr() * 3);
+  for (let i = 0; i < nOff; i++) {
+    const ad = doorAlong(pick(doorPool)), t0 = (0.7 + i * 0.28) * sc, lane = i % 2 ? -0.0065 : -0.001;   // two lanes, a body-width apart
+    if (tau < t0) continue;
+    const out = clamp01((tau - t0) / (0.35 * sc));
+    if (out < 1) { putPerson(f, dir, ad, THREE.MathUtils.lerp(0.02, 0.004, easeS(out)), true, t, sd + i); continue; }
+    const end = Math.sign(ad || 1) * 0.165, walked = (tau - t0 - 0.35 * sc) * 0.075;
+    if (walked >= Math.abs(end - ad)) continue;                    // reached the stairs
+    putPerson(f, dir, ad + Math.sign(end - ad) * walked, THREE.MathUtils.lerp(0.004, lane, clamp01(walked / 0.012)), true, t, sd + i);
+  }
+  for (let j = 0; j < nOn; j++) {
+    const slot = pick(sidePool), ad = doorAlong(slot >> 1), aw = ad + (slot & 1 ? 1 : -1) * 0.0065, t0 = (1.9 + j * 0.27) * sc;
+    const k1 = clamp01((tau - t0) / (0.3 * sc)), k2 = clamp01((tau - t0 - 0.3 * sc) / (0.3 * sc));
+    if (k2 >= 1) continue;                                          // inside the train
+    if (k1 < 1) putPerson(f, dir, THREE.MathUtils.lerp(aw, ad, easeS(k1)), THREE.MathUtils.lerp(0.006, 0.009, k1), k1 > 0, t, sd + 50 + j);
+    else putPerson(f, dir, ad, THREE.MathUtils.lerp(0.009, 0.022, easeS(k2)), true, t, sd + 50 + j);
+  }
+  return ease(rng(tau, 0.35 * sc, 0.75 * sc)) * (1 - ease(rng(tau, 4.2 * sc, 4.6 * sc)));   // door opening 0..1
+}
+// draw every platform's idle crowd except the one where a train is being watched, then that platform's boarding scene
+function drawPeople(active, t) {
+  nPeople = 0;
+  for (const pk in platforms) if (!active || pk !== active.pk) for (const [a, l] of idleFor(pk)) putPerson(platforms[pk], 1, a, l, false, t, pk.length * 13 + Math.round(a * 1000));
+  let open = 0;
+  if (active) open = crowdAt(platforms[active.pk], active.dir, t - active.t0, active.D, active.sd, t);
+  bodies.count = heads.count = nPeople;
+  bodies.instanceMatrix.needsUpdate = heads.instanceMatrix.needsUpdate = true;
+  bodies.instanceColor.needsUpdate = heads.instanceColor.needsUpdate = true;
+  return open;
+}
+// station close-up: from above the opposite track, looking across the platform at the train's doors
+function zoomCam(key, stopIdx, dir) {
+  const f = platforms[key + ':' + LINES[key].stops[stopIdx]], toTrain = f.side.clone().multiplyScalar(-dir), along = f.dir.clone().multiplyScalar(dir);
+  const pos = f.p.clone().addScaledVector(toTrain, -0.078).addScaledVector(along, -0.075).add(new THREE.Vector3(0, 0.048, 0));
+  const target = f.p.clone().addScaledVector(toTrain, 0.012).addScaledVector(along, 0.012).add(new THREE.Vector3(0, 0.008, 0));
+  return { pos, target };
+}
 
 // ---------- chase camera, shared by Ride and the showcase ----------
 // close and low at stations, pulled back and up while the train is moving
@@ -780,7 +894,7 @@ function rideText(s) {
   const stops = LINES.M1.stops, i = stops[s.at ?? s.next];
   return [s.at !== null ? 'M1 · Now at' : 'M1 · Next station', STATIONS[i][0], 'Platform ' + depthText(STATIONS[i][3])];
 }
-function startRide() { hideCard(); fly = null; controls.enabled = false; controls.autoRotate = false; ride = { t0: clock.getElapsedTime() }; $('ride').textContent = 'Stop ride'; $('lower').classList.remove('out'); }
+function startRide() { hideCard(); fly = null; controls.enabled = false; controls.autoRotate = false; ride = { t0: clock.getElapsedTime(), fromP: camera.position.clone(), fromT: controls.target.clone() }; $('ride').textContent = 'Stop ride'; $('lower').classList.remove('out'); }
 function stopRide() {
   if (!ride) return;
   ride = null; controls.enabled = true; $('lower').classList.add('out'); $('ride').textContent = 'Ride M1';
@@ -802,14 +916,23 @@ function loop() {
     controls.target.lerpVectors(fly.fromT, fly.toT, e); camera.position.lerpVectors(fly.fromP, fly.toP, e);
     if (k >= 1) fly = null;
   }
+  let active = null;
   if (ride) {
-    const s = trainState('M1', 0, t), c = chaseCam(lineState.M1.curve, s.s, s.dir, s.moving);
-    const k = 0.04 + 0.2 * ease(clamp01((t - ride.t0) / 1.6));      // ease into the chase view
-    camera.position.lerp(c.pos, k); controls.target.lerp(c.target, k);
+    const s = trainState('M1', 0, t), st = lineState.M1, c = chaseCam(st.curve, s.s, s.dir, s.moving);
+    if (s.at !== null) ride.stop = { pk: 'M1:' + LINES.M1.stops[s.at], dir: s.dir, t0: t - s.tau, D: s.D, sd: s.at * 31 + (s.dir > 0 ? 0 : 500) };
+    if (ride.stop && t - ride.stop.t0 < ride.stop.D + 3) active = ride.stop;
+    if (s.at !== null) {   // ease into the station close-up, and back out before departure
+      const z = zoomCam('M1', s.at, s.dir), w = ease(rng(s.tau, 0, 0.7)) * (1 - ease(rng(s.tau, s.D - 0.6, s.D)));
+      c.pos.lerp(z.pos, w); c.target.lerp(z.target, w);
+    }
+    const k = ease(clamp01((t - ride.t0) / 1.8));      // ease from wherever the camera was into the ride
+    camera.position.lerpVectors(ride.fromP, c.pos, k); controls.target.lerpVectors(ride.fromT, c.target, k);
     setLowerText(...rideText(s));
   } else if (!fly) controls.update();
+  const open = drawPeople(active, t);
+  lineState.M1.trains.forEach((tr, i) => setDoors(tr, ride && i === 0 ? open : 0));
   camera.lookAt(controls.target);
-  updateLabels(45, ride ? 2.5 : Infinity);
+  updateLabels(45, ride ? 1.6 : Infinity);
   composer.render(); labelRenderer.render(scene, camera);
 }
 resize();
@@ -822,78 +945,123 @@ loop();
 window.enterRenderMode = (w = 1920, h = 1080) => {
   renderMode = true; document.body.classList.add('render'); controls.enabled = false; hideCard();
   renderer.setPixelRatio(1); resize(w, h);
+  Object.values(heroes).forEach(h => { h.group.visible = true; });
 };
-// hero train: Kivenlahti → Tapiola → Rautatientori → Itäkeskus, eased runs with dwells between
-const HERO_RUNS = [['Kivenlahti', 'Tapiola', 7.8, 13.0], ['Tapiola', 'Rautatientori', 14.0, 19.0], ['Rautatientori', 'Itäkeskus', 20.0, 25.0]];
-const SHOW = { end: 36, rise: [25.6, 29.2] };
-const heroTrain = makeTrain(); scene.add(heroTrain.group); heroTrain.group.visible = false;
-function heroState(t) {
-  const st = lineState.M1, sOf = n => st.knotS[LINES.M1.stops.indexOf(IDX[n])];
-  for (const [a, b, t0, t1] of HERO_RUNS) if (t >= t0 && t < t1) { const k = (t - t0) / (t1 - t0); return { s: THREE.MathUtils.lerp(sOf(a), sOf(b), easeS(k)), moving: Math.sin(Math.PI * k) }; }
-  const at = t < 7.8 ? 'Kivenlahti' : t < 14 ? 'Tapiola' : t < 20 ? 'Rautatientori' : 'Itäkeskus';
-  return { s: sOf(at), moving: 0 };
+// ---------- showcase plan: M1 end to end stopping at every station, then the M2 branch ----------
+// key stations get a close-up with passengers; the rest are short stops
+const KEYSTOPS = new Set(['Kivenlahti', 'Matinkylä', 'Tapiola', 'Koivusaari', 'Rautatientori', 'Kulosaari', 'Itäkeskus', 'Vuosaari', 'Mellunmäki']);
+const KEY_D = 5, SHORT_D = 0.7, INTRO = 6.2, CHANGE = 5, OUTRO = 6.5;
+const heroes = { M1: makeTrain(), M2: makeTrain() };
+Object.values(heroes).forEach(h => { h.group.visible = false; scene.add(h.group); });   // shown only in the showcase
+function buildPlan() {
+  const plan = []; let t = INTRO;
+  const rideLine = (key, from) => {
+    const st = lineState[key], stops = LINES[key].stops;
+    for (let k = from; k < stops.length; k++) {
+      const isKey = KEYSTOPS.has(STATIONS[stops[k]][0]) && !(key === 'M2' && k === from);
+      const d = isKey ? KEY_D : key === 'M2' && k === from ? 1.4 : SHORT_D;
+      plan.push({ key, type: 'dwell', k, t0: t, d, isKey }); t += d;
+      if (k < stops.length - 1) {
+        const d2 = 0.8 + 0.55 * Math.sqrt((st.knotS[k + 1] - st.knotS[k]) * st.length);
+        plan.push({ key, type: 'run', from: k, to: k + 1, t0: t, d: d2 }); t += d2;
+      }
+    }
+  };
+  rideLine('M1', 0); const m1End = t; t += CHANGE; const m2Start = t;
+  const m2From = LINES.M2.stops.indexOf(IDX.Itäkeskus);
+  rideLine('M2', m2From);
+  return { plan, m1End, m2Start, m2From, m2End: t, end: t + OUTRO };
 }
-// lower-third beats; each plate eases in and out
-const BEATS = [
-  [6.6, 8.6, 'M1 · Departing', 'Kivenlahti'], [8.9, 12.6, 'M1 · Next station', 'Tapiola'], [12.9, 14.3, 'M1 · Now at', 'Tapiola'],
-  [14.6, 18.6, 'M1 · Next station', 'Rautatientori'], [18.9, 20.3, 'M1 · Now at', 'Rautatientori'],
-  [20.6, 24.6, 'M1 · Next station', 'Itäkeskus'], [24.9, 28.8, 'Itäkeskus · the lines split', 'M1 → Vuosaari', 'M2 → Mellunmäki'],
-];
+const PLAN = buildPlan();
+function heroAt(key, t) {
+  const st = lineState[key], ev = PLAN.plan.filter(e => e.key === key);
+  const e = t < ev[0].t0 ? ev[0] : ev.find(x => t < x.t0 + x.d) || ev[ev.length - 1];
+  if (e.type === 'dwell') return { s: st.knotS[e.k], moving: 0, at: e.k, tau: t - e.t0, D: e.d, isKey: e.isKey, e };
+  const k = (t - e.t0) / e.d;
+  return { s: THREE.MathUtils.lerp(st.knotS[e.from], st.knotS[e.to], easeS(k)), moving: Math.sin(Math.PI * k), next: e.to, e };
+}
+function camHero(key, h) {
+  const c = chaseCam(lineState[key].curve, h.s, 1, h.moving);
+  if (h.at !== undefined && h.isKey) {   // eased zoom into the platform, and back out before departure
+    const z = zoomCam(key, h.at, 1), w = ease(rng(h.tau, 0, 0.8)) * (1 - ease(rng(h.tau, h.D - 0.7, h.D)));
+    c.pos.lerp(z.pos, w); c.target.lerp(z.target, w);
+  }
+  return c;
+}
 function plate(el, t, t0, t1, dy = 18) {
   const a = ease(rng(t, t0, t0 + 0.55)) * (1 - ease(rng(t, t1 - 0.45, t1)));
   el.style.opacity = a; el.style.transform = `translateY(${(1 - a) * dy}px)`;
   return a;
 }
 const WIDE_T = new THREE.Vector3(-2.6, -0.6, -2.0), WIDE_P = new THREE.Vector3(-2.6, 17.5, 22.5);
+const arc = (a, b, k, h) => a.clone().lerp(b, k).add(new THREE.Vector3(0, Math.sin(Math.PI * k) * h, 0));
 window.renderFrame = t => {
+  const P = PLAN;
   // title card eases in and out, then returns for the end
   const tc = $('title-card'); tc.hidden = false;
-  const endOn = t > 30;
+  const endOn = t > P.end - 6;
   $('title-f').textContent = endOn ? 'M1 Kivenlahti – Vuosaari · M2 Tapiola – Mellunmäki' : '30 stations · 2 lines · ≈43 km';
-  plate(tc, t, endOn ? 30.6 : 0.4, endOn ? 99 : 5.4, 30);
+  plate(tc, t, endOn ? P.end - 5.2 : 0.4, endOn ? 1e9 : 5.0, 30);
 
   updateTrains(t);
   waterNormal.offset.set(t * 0.004, t * 0.002);
-  const st = lineState.M1, h = heroState(t);
-  heroTrain.group.visible = t > 5.6 && t < 29.5;
-  placeTrain(heroTrain, st.curve, h.s, 1);
-  // keep timetable trains out of the hero's way
-  const hp = heroTrain.cars[0].position;
-  st.trains.forEach(tr => { tr.group.visible = !heroTrain.group.visible || tr.cars[0].position.distanceTo(hp) > 0.6; });
+  const h1 = heroAt('M1', t), h2 = heroAt('M2', t);
+  placeTrain(heroes.M1, lineState.M1.curve, h1.s, 1);
+  placeTrain(heroes.M2, lineState.M2.curve, h2.s, 1);
 
-  // camera: overview → descend to Kivenlahti → chase → rise at Itäkeskus → wide orbit (every move eased)
-  const kv = stationObjs[IDX.Kivenlahti].pos, o = ease(rng(t, 0.3, 6.5));
-  const overP = WIDE_P.clone().lerp(new THREE.Vector3(kv.x - 4, 6, kv.z + 7), o), overT = WIDE_T.clone().lerp(new THREE.Vector3(kv.x + 1.5, -0.4, kv.z - 0.5), o);
-  let pos = overP, target = overT;
-  const c = chaseCam(st.curve, h.s, 1, h.moving);
-  if (t > 4.6) {
-    // fly to a point straight above the train, then sink vertically into the cut so the camera never passes through the ground
-    const kA = ease(rng(t, 4.6, 7.2)), kB = ease(rng(t, 7.0, 9.6));
+  // camera: overview → sink into the cut at Kivenlahti → ride M1 → arc over to the M2 platform → ride M2 → rise to the wide view
+  let pos, target;
+  if (t < INTRO) {
+    const c = camHero('M1', h1), kv = stationObjs[IDX.Kivenlahti].pos, o = ease(rng(t, 0.3, 4.0));
+    const overP = WIDE_P.clone().lerp(new THREE.Vector3(kv.x - 4, 6, kv.z + 7), o), overT = WIDE_T.clone().lerp(new THREE.Vector3(kv.x + 1.5, -0.4, kv.z - 0.5), o);
+    const kA = ease(rng(t, 1.8, 4.4)), kB = ease(rng(t, 4.2, INTRO));
     const above = c.pos.clone().add(new THREE.Vector3(0, (1 - kB) * (-c.pos.y + 1.6), 0));
-    pos = overP.clone().lerp(above, kA); target = overT.clone().lerp(c.target, ease(rng(t, 4.6, 6.8)));
-  }
-  const it = stationObjs[IDX.Itäkeskus].pos;
-  const forkP = new THREE.Vector3(it.x - 3.2, 4.2, it.z + 4.6), forkT = new THREE.Vector3(it.x + 1.0, 0, it.z - 0.8);
-  if (t > SHOW.rise[0]) { const k = ease(rng(t, ...SHOW.rise)); pos = c.pos.clone().lerp(forkP, k); target = c.target.clone().lerp(forkT, k); }
-  if (t > SHOW.rise[1]) {
-    const k = ease(rng(t, SHOW.rise[1], SHOW.end - 1.2)), a = (t - SHOW.rise[1]) * 0.04;
-    const wp = new THREE.Vector3(WIDE_P.x + Math.sin(a) * 3, WIDE_P.y, WIDE_P.z - Math.sin(a) * 1.5);
-    pos = forkP.clone().lerp(wp, k); target = forkT.clone().lerp(WIDE_T, k);
+    pos = overP.lerp(above, kA); target = overT.lerp(c.target, ease(rng(t, 1.8, 4.0)));
+  } else if (t < P.m1End) ({ pos, target } = camHero('M1', h1));
+  else if (t < P.m2Start) {
+    const a = camHero('M1', heroAt('M1', P.m1End - 0.01)), b = camHero('M2', heroAt('M2', P.m2Start)), k = ease(rng(t, P.m1End, P.m2Start));
+    pos = arc(a.pos, b.pos, k, 3.2); target = a.target.lerp(b.target, k);
+  } else if (t < P.m2End) ({ pos, target } = camHero('M2', h2));
+  else {
+    const a = camHero('M2', heroAt('M2', P.m2End - 0.01)), k = ease(rng(t, P.m2End, P.m2End + 4.8)), w = (t - P.m2End) * 0.04;
+    const wp = new THREE.Vector3(WIDE_P.x + Math.sin(w) * 2.5, WIDE_P.y, WIDE_P.z - Math.sin(w) * 1.2);
+    pos = arc(a.pos, wp, k, 2.5); target = a.target.lerp(WIDE_T, k);
   }
   camera.position.copy(pos); controls.target.copy(target); camera.lookAt(target); camera.updateMatrixWorld();
 
-  const lower = $('lower'); lower.classList.remove('out');
-  const beat = BEATS.find(b => t >= b[0] && t < b[1]);
-  if (beat) {
-    const [t0, t1, k, n, dOverride] = beat;
-    setLowerText(k, n, dOverride ?? ('Platform ' + depthText(STATIONS[IDX[n]][3])));
-    plate(lower, t, t0, t1);
-  } else lower.style.opacity = 0;
+  // timetable trains: only those on the opposite track to the heroes, and never right in front of the lens
+  for (const key of Object.keys(LINES)) lineState[key].trains.forEach((tr, i) => {
+    const st = trainState(key, i / lineState[key].trains.length, t);
+    tr.group.visible = st.dir < 0 && tr.cars.every(c => c.position.distanceTo(camera.position) > 0.35);
+  });
 
-  updateLabels(t > SHOW.rise[1] ? 30 : 40, t > 8 && t < SHOW.rise[0] + 1 ? 2.5 : Infinity);
+  // passengers at the latest key stop (they keep walking to the stairs after the train has left)
+  const last = P.plan.filter(e => e.type === 'dwell' && e.isKey && e.t0 <= t).pop();
+  const active = last && t - last.t0 < last.d + 3.5 ? { pk: last.key + ':' + LINES[last.key].stops[last.k], dir: 1, t0: last.t0, D: last.d, sd: last.k * 31 + (last.key === 'M2' ? 900 : 0) } : null;
+  const open = drawPeople(active, t);
+  setDoors(heroes.M1, active && last.key === 'M1' ? open : 0); setDoors(heroes.M2, active && last.key === 'M2' ? open : 0);
+
+  // lower third: one plate per ride; the station line eases in each time it changes
+  const lower = $('lower'); lower.classList.remove('out');
+  const nameEl = $('lower-n');
+  const rideOf = (key, h, from) => {
+    const stops = LINES[key].stops, n = stops.length - from - 1;
+    if (h.at !== undefined) {
+      const i = stops[h.at], idx = h.at - from;
+      setLowerText(key === 'M1' ? `M1 · Station ${idx + 1} of ${n + 1}` : idx === 0 ? 'M2 · Departing' : `M2 · Station ${idx} of ${n}`, STATIONS[i][0], 'Platform ' + depthText(STATIONS[i][3]));
+    } else setLowerText(`${key} · Next station`, STATIONS[stops[h.next]][0], 'Platform ' + depthText(STATIONS[stops[h.next]][3]));
+    const ch = ease(rng(t, h.e.t0, h.e.t0 + 0.3));
+    nameEl.style.opacity = ch; nameEl.style.transform = `translateY(${(1 - ch) * 10}px)`;
+  };
+  if (t < P.m1End + 0.6) { rideOf('M1', h1, 0); plate(lower, t, INTRO - 0.3, P.m1End + 0.6); }
+  else if (t < P.m2Start) { setLowerText('Itäkeskus · change to M2', 'M2 → Mellunmäki', 'Myllypuro · Kontula · Mellunmäki'); nameEl.style.opacity = 1; nameEl.style.transform = 'none'; plate(lower, t, P.m1End + 0.6, P.m2Start); }
+  else { rideOf('M2', h2, P.m2From); plate(lower, t, P.m2Start, P.m2End + 0.8); }
+
+  updateLabels(t > P.m2End + 2 ? 30 : 40, t > INTRO - 1 && t < P.m2End + 1.5 ? 1.6 : Infinity);
   composer.render(); labelRenderer.render(scene, camera);
 };
-window.FPS = 30; window.FRAMES = SHOW.end * 30;
+window.FPS = 30; window.FRAMES = Math.ceil(PLAN.end * 30);
+window.PLAN_SUMMARY = () => PLAN.plan.filter(e => e.type === 'dwell').map(e => [e.key, STATIONS[LINES[e.key].stops[e.k]][0], +e.t0.toFixed(2), e.d]).concat([['end', PLAN.m1End, PLAN.m2Start, PLAN.end]]);
 window.sceneReady = true;
 </script>
 
