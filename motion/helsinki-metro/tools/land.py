@@ -6,7 +6,8 @@ from shapely.ops import unary_union
 LAT0, LON0 = 60.1709, 24.9418
 KX = math.cos(math.radians(LAT0)) * 111.32
 KZ = 110.57
-X0, Y0, X1, Y1 = 24.50, 60.06, 25.32, 60.34
+# bbox in degrees: optional args 3-6 (lon0 lat0 lon1 lat1)
+X0, Y0, X1, Y1 = map(float, sys.argv[3:7]) if len(sys.argv) > 6 else (24.50, 60.06, 25.32, 60.34)
 d = json.load(open(sys.argv[1]))
 gs = [ft['geometry'] for ft in d['features']] if 'features' in d else d.get('geometries', [d])
 parts = []
